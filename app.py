@@ -6,13 +6,13 @@ import gspread
 
 # --- Konfigurasi Halaman ---
 st.set_page_config(
-    page_title="Dashboard Finance Kita",
+    page_title="Dashboard Keuangan Keluarga",
     page_icon="💰",
     layout="wide"
 )
 
 # --- Judul Utama ---
-st.title("💰 Dashboard Kontrol & Catatan Finance Kita")
+st.title("💰 Dashboard Kontrol & Catatan Keuangan Keluarga")
 st.caption("Tersambung ke Google Sheets 📄")
 
 # --- Setup Koneksi Google Sheets ---
@@ -43,10 +43,10 @@ except Exception as e:
 
 # --- Fungsi untuk Membaca Data ---
 @st.cache_data(ttl=60) # Cache data selama 60 detik
-def load_data(ws):
+def load_data(_ws):
     """Membaca semua data dari worksheet dan mengubahnya jadi DataFrame."""
     try:
-        data = ws.get_all_records() # Ini membaca data sebagai list of dicts
+        data = _ws.get_all_records() # Ini membaca data sebagai list of dicts
         
         if not data:
             # Jika sheet kosong, kembalikan DataFrame kosong dengan kolom
