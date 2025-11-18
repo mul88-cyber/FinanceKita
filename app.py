@@ -14,7 +14,7 @@ st.set_page_config(
 
 # --- Judul Utama ---
 st.title("🚀✨ Dashboard Keuangan Keluarga (Versi MAKSIMAL)")
-st.caption(f"Versi 4.2 (Fix Sankey Key) | Tersambung ke Google Sheets 📄 | Data per: {datetime.now().strftime('%d %B %Y')}")
+st.caption(f"Versi 4.3 (Fix NameError) | Tersambung ke Google Sheets 📄 | Data per: {datetime.now().strftime('%d %B %Y')}")
 
 # --- ====================================================== ---
 # ---               FUNGSI HELPER VISUALISASI              ---
@@ -51,7 +51,7 @@ def create_donut_chart(df, title):
     
     chart = donut + text_total
     # FIX: Mengganti use_container_width dengan width='stretch'
-    return st.altair_chart(chart, width='stretch')
+    st.altair_chart(chart, use_container_width=True) # Altair masih pakai use_container_width
 
 def create_calendar_heatmap(df, year_month):
     """Membuat Calendar Heatmap pengeluaran untuk bulan yang dipilih."""
@@ -79,12 +79,10 @@ def create_calendar_heatmap(df, year_month):
     df_calendar['weekday'] = df_calendar['Tanggal'].dt.dayofweek # Senin=0, Minggu=6
     
     # --- PERBAIKAN BUG HEATMAP ---
-    # Mendefinisikan label hari menggunakan ekspresi Vega-Lite
     day_labels = "['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'][datum.value]"
     
     heatmap = alt.Chart(df_calendar).mark_rect(stroke='black', strokeWidth=1).encode(
         x=alt.X('week:O', title='Minggu ke-', axis=alt.Axis(labels=True, ticks=True, domain=False)),
-        # Menggunakan labelExpr untuk label kustom, bukan 'labels'
         y=alt.Y('weekday:O', title='Hari', axis=alt.Axis(labelExpr=day_labels, domain=False, ticks=False)),
         color=alt.Color('Jumlah', title='Pengeluaran', scale=alt.Scale(range='heatmap'), legend=alt.Legend(direction='horizontal', orient='bottom')),
         tooltip=[
@@ -96,13 +94,17 @@ def create_calendar_heatmap(df, year_month):
         title=f"Peta Panas Pengeluaran Bulan {year_month}"
     )
     
-    # FIX: Mengganti use_container_width dengan width='stretch'
-    st.altair_chart(heatmap + heatmap.mark_text(baseline='middle', color='black'), width='stretch')
+    st.altair_chart(heatmap + heatmap.mark_text(baseline='middle', color='black'), use_container_width=True) # Altair masih pakai use_container_width
     # --- AKHIR PERBAIKAN ---
 
-# --- PERBAIKAN BUG "DuplicateElementId" ---
 def create_sankey_chart(df, key):
     """Membuat Sankey Diagram aliran dana dengan key unik."""
+    
+    # --- PERBAIKAN BUG "NameError" ---
+    # Baris ini tidak sengaja terhapus di v4.2
+    df_pemasukan = df[df['Tipe'] == 'Pemasukan']
+    # --- AKHIR PERBAIKAN ---
+    
     df_pengeluaran = df[df['Tipe'] == 'Pengeluaran']
     
     if df_pemasukan.empty or df_pengeluaran.empty:
@@ -173,10 +175,8 @@ def create_sankey_chart(df, key):
         )
     )])
     
-    fig.update_layout(title_text="Diagram Alir Keuangan (Sankey)", font_size=12)
-    # Menambahkan 'key' unik
+    fig.update_layout(title_text="Diagram Alir Keuangan (Sankey)", font_size=12, template="plotly_dark")
     st.plotly_chart(fig, use_container_width=True, key=key) 
-# --- AKHIR PERBAIKAN ---
 
 
 # --- Setup Koneksi Google Sheets ---
@@ -255,11 +255,7 @@ if submitted and GSHEET_CONNECTED:
                 worksheet.append_row(header)
             worksheet.append_row(new_row)
             st.sidebar.success("Transaksi berhasil ditambahkan!")
-            
-            # --- PERBAIKAN BUG ---
-            # Mengganti st.experimental_rerun() dengan st.rerun()
-            st.rerun() 
-            # --- AKHIR PERBAIKAN ---
+            st.rerun() # Menggunakan st.rerun() yang lebih baru
             
     except Exception as e:
         st.sidebar.error(f"Gagal menyimpan ke GSheet: {e}")
@@ -361,8 +357,7 @@ if GSHEET_CONNECTED:
                     color=alt.Color('Tipe', title='Tipe', scale=alt.Scale(domain=['Pemasukan', 'Pengeluaran'], range=['green', 'red'])),
                     tooltip=['Tanggal', 'Tipe', 'Jumlah']
                 ).interactive()
-                # FIX: Mengganti use_container_width dengan width='stretch'
-                st.altair_chart(bar_chart, width='stretch')
+                st.altair_chart(bar_chart, use_container_width=True)
 
                 st.subheader("Arus Kas (Cashflow Kumulatif)")
                 df_sorted = df_filtered.sort_values(by="Tanggal").copy()
@@ -377,8 +372,7 @@ if GSHEET_CONNECTED:
                         y=alt.Y('Saldo Kumulatif', title='Saldo (Rp)'),
                         tooltip=['Tanggal', 'Tipe', 'Kategori', 'Jumlah', 'Saldo Kumulatif']
                     ).interactive()
-                    # FIX: Mengganti use_container_width dengan width='stretch'
-                    st.altair_chart(line_chart, width='stretch')
+                    st.altair_chart(line_chart, use_container_width=True)
 
             # --- TAB 2: ANALISIS PROPORSI ---
             with tab_analisis:
@@ -399,10 +393,9 @@ if GSHEET_CONNECTED:
                 st.subheader("Top 5 Kategori Pengeluaran (Sesuai Filter)")
                 df_top_5 = df_chart_pengeluaran.sort_values(by="Jumlah", ascending=False).head(5).reset_index(drop=True)
                 df_top_5.index = df_top_5.index + 1
-                # FIX: Mengganti use_container_width dengan width='stretch'
                 st.dataframe(
                     df_top_5,
-                    width='stretch',
+                    use_container_width=True,
                     column_config={
                         "Jumlah": st.column_config.NumberColumn("Jumlah (Rp)", format="Rp %'.0f"),
                         "Kategori": st.column_config.TextColumn("Kategori"),
@@ -412,9 +405,7 @@ if GSHEET_CONNECTED:
                 st.divider()
                 
                 st.subheader("Diagram Alir Dana / Sankey (Sesuai Filter)")
-                # --- PERBAIKAN BUG "DuplicateElementId" ---
                 create_sankey_chart(df_filtered, key="sankey_filtered")
-                # --- AKHIR PERBAIKAN ---
 
             # --- TAB 3: ANALISIS BULANAN (BARU) ---
             with tab_bulanan:
@@ -436,9 +427,7 @@ if GSHEET_CONNECTED:
                     
                     st.subheader(f"Diagram Alir Dana (Sankey) - Bulan {selected_month}")
                     df_sankey_bulanan = df[df['Bulan-Tahun'] == selected_month]
-                    # --- PERBAIKAN BUG "DuplicateElementId" ---
                     create_sankey_chart(df_sankey_bulanan, key="sankey_monthly")
-                    # --- AKHIR PERBAIKAN ---
 
 
             # --- TAB 4: DATA TRANSAKSI ---
@@ -447,19 +436,17 @@ if GSHEET_CONNECTED:
                 
                 with st.expander("📊 Klik untuk melihat Ringkasan Kategori (sesuai filter)"):
                     df_pivot = df_filtered.groupby(['Tipe', 'Kategori'])['Jumlah'].sum().reset_index()
-                    # FIX: Mengganti use_container_width dengan width='stretch'
                     st.dataframe(
                         df_pivot.sort_values(by=["Tipe", "Jumlah"], ascending=[True, False]), 
-                        width='stretch',
+                        use_container_width=True,
                         column_config={
                             "Jumlah": st.column_config.NumberColumn("Total Jumlah (Rp)", format="Rp %'.0f"),
                         }
                     )
                 
-                # FIX: Mengganti use_container_width dengan width='stretch'
                 st.dataframe(
                     df_filtered.sort_values(by="Tanggal", ascending=False), 
-                    width='stretch',
+                    use_container_width=True,
                     height=500,
                     column_config={
                         "Jumlah": st.column_config.NumberColumn("Jumlah (Rp)", format="Rp %'.0f"),
