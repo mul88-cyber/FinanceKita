@@ -7,13 +7,13 @@ import plotly.graph_objects as go
 
 # --- Konfigurasi Halaman ---
 st.set_page_config(
-    page_title="Dashboard Keuangan MAKSIMAL",
+    page_title="Dashboard FinanceKita",
     page_icon="🚀", 
     layout="wide"
 )
 
 # --- Judul Utama ---
-st.title("🚀✨ Dashboard Keuangan Keluarga (Versi MAKSIMAL)")
+st.title("🚀✨ Dashboard FinanceKita (Versi MAKSIMAL)")
 st.caption(f"Versi 4.3 (Fix NameError) | Tersambung ke Google Sheets 📄 | Data per: {datetime.now().strftime('%d %B %Y')}")
 
 # --- ====================================================== ---
@@ -175,7 +175,7 @@ def create_sankey_chart(df, key):
         )
     )])
     
-    fig.update_layout(title_text="Diagram Alir Keuangan (Sankey)", font_size=12, template="plotly_dark")
+    fig.update_layout(title_text="Diagram Alir Finance (Sankey)", font_size=12, template="plotly_dark")
     st.plotly_chart(fig, use_container_width=True, key=key) 
 
 
