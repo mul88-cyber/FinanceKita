@@ -14,7 +14,7 @@ st.set_page_config(
 
 # --- Judul Utama ---
 st.title("🚀✨ Dashboard Keuangan Keluarga (Versi MAKSIMAL)")
-st.caption(f"Versi 4.1 (Fix Heatmap) | Tersambung ke Google Sheets 📄 | Data per: {datetime.now().strftime('%d %B %Y')}")
+st.caption(f"Versi 4.2 (Fix Sankey Key) | Tersambung ke Google Sheets 📄 | Data per: {datetime.now().strftime('%d %B %Y')}")
 
 # --- ====================================================== ---
 # ---               FUNGSI HELPER VISUALISASI              ---
@@ -100,9 +100,9 @@ def create_calendar_heatmap(df, year_month):
     st.altair_chart(heatmap + heatmap.mark_text(baseline='middle', color='black'), width='stretch')
     # --- AKHIR PERBAIKAN ---
 
-def create_sankey_chart(df):
-    """Membuat Sankey Diagram aliran dana."""
-    df_pemasukan = df[df['Tipe'] == 'Pemasukan']
+# --- PERBAIKAN BUG "DuplicateElementId" ---
+def create_sankey_chart(df, key):
+    """Membuat Sankey Diagram aliran dana dengan key unik."""
     df_pengeluaran = df[df['Tipe'] == 'Pengeluaran']
     
     if df_pemasukan.empty or df_pengeluaran.empty:
@@ -174,7 +174,9 @@ def create_sankey_chart(df):
     )])
     
     fig.update_layout(title_text="Diagram Alir Keuangan (Sankey)", font_size=12)
-    st.plotly_chart(fig, use_container_width=True) # Plotly tetap pakai use_container_width
+    # Menambahkan 'key' unik
+    st.plotly_chart(fig, use_container_width=True, key=key) 
+# --- AKHIR PERBAIKAN ---
 
 
 # --- Setup Koneksi Google Sheets ---
@@ -253,7 +255,11 @@ if submitted and GSHEET_CONNECTED:
                 worksheet.append_row(header)
             worksheet.append_row(new_row)
             st.sidebar.success("Transaksi berhasil ditambahkan!")
-            st.experimental_rerun() 
+            
+            # --- PERBAIKAN BUG ---
+            # Mengganti st.experimental_rerun() dengan st.rerun()
+            st.rerun() 
+            # --- AKHIR PERBAIKAN ---
             
     except Exception as e:
         st.sidebar.error(f"Gagal menyimpan ke GSheet: {e}")
@@ -406,7 +412,9 @@ if GSHEET_CONNECTED:
                 st.divider()
                 
                 st.subheader("Diagram Alir Dana / Sankey (Sesuai Filter)")
-                create_sankey_chart(df_filtered)
+                # --- PERBAIKAN BUG "DuplicateElementId" ---
+                create_sankey_chart(df_filtered, key="sankey_filtered")
+                # --- AKHIR PERBAIKAN ---
 
             # --- TAB 3: ANALISIS BULANAN (BARU) ---
             with tab_bulanan:
@@ -428,7 +436,9 @@ if GSHEET_CONNECTED:
                     
                     st.subheader(f"Diagram Alir Dana (Sankey) - Bulan {selected_month}")
                     df_sankey_bulanan = df[df['Bulan-Tahun'] == selected_month]
-                    create_sankey_chart(df_sankey_bulanan)
+                    # --- PERBAIKAN BUG "DuplicateElementId" ---
+                    create_sankey_chart(df_sankey_bulanan, key="sankey_monthly")
+                    # --- AKHIR PERBAIKAN ---
 
 
             # --- TAB 4: DATA TRANSAKSI ---
