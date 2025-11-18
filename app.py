@@ -6,13 +6,13 @@ import gspread
 
 # --- Konfigurasi Halaman ---
 st.set_page_config(
-    page_title="Dashboard Keuangan Keluarga",
+    page_title="Dashboard Finance Kita",
     page_icon="💰",
     layout="wide"
 )
 
 # --- Judul Utama ---
-st.title("💰 Dashboard Kontrol & Catatan Keuangan Keluarga")
+st.title("💰 Dashboard Kontrol & Catatan Finance Kita")
 st.caption("Tersambung ke Google Sheets 📄")
 
 # --- Setup Koneksi Google Sheets ---
