@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
-from datetime import datetime
+from datetime import datetime, date # Menambahkan 'date' secara eksplisit
 import gspread
 import plotly.graph_objects as go # Baru untuk Sankey
 
@@ -68,9 +68,9 @@ def create_calendar_heatmap(df, year_month):
     df_daily_spend['Tanggal'] = pd.to_datetime(df_daily_spend['Tanggal'])
     
     # Buat data kalender penuh untuk bulan itu
-    start_date = datetime.strptime(year_month, '%Y-%m').date()
-    end_date = (start_date + pd.offsets.MonthEnd(1)).date()
-    all_days = pd.date_range(start_date, end_date, freq='D')
+    start_date_dt = datetime.strptime(year_month, '%Y-%m').date()
+    end_date_dt = (start_date_dt + pd.offsets.MonthEnd(1)).date()
+    all_days = pd.date_range(start_date_dt, end_date_dt, freq='D')
     df_calendar = pd.DataFrame(all_days, columns=['Tanggal'])
     
     # Gabung dengan data pengeluaran
@@ -310,14 +310,16 @@ if GSHEET_CONNECTED:
         with col2:
             end_date = st.date_input("Tanggal Akhir", max_date, min_value=min_date, max_value=max_date)
             
-        all_kategori = df['Kategori'].unique()
+        # --- PERBAIKAN BUG "isinstance" ---
+        all_kategori = df['Kategori'].unique().tolist() # Mengubah numpy.ndarray jadi list
+        # --- AKHIR PERBAIKAN ---
         selected_kategori = st.multiselect("Filter Kategori", all_kategori, default=all_kategori)
         
         st.divider()
 
         # --- 2. LOGIKA FILTERISASI DATA ---
-        if not isinstance(start_date, datetime.date): start_date = min_date
-        if not isinstance(end_date, datetime.date): end_date = max_date
+        if not isinstance(start_date, date): start_date = min_date
+        if not isinstance(end_date, date): end_date = max_date
 
         df_filtered = df[
             (df['Tanggal'].dt.date >= start_date) &
