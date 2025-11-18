@@ -102,16 +102,25 @@ def load_data(_ws):
 
 # --- Sidebar: Input Form ---
 st.sidebar.header("📝 Tambah Transaksi Baru")
+
+# --- PERBAIKAN BUG ---
+# Pindahkan 'Tipe Transaksi' KE LUAR form.
+# Ini memaksa Streamlit untuk re-run dan memperbarui daftar kategori di bawah.
+tipe = st.sidebar.radio("Tipe Transaksi", ["Pemasukan", "Pengeluaran"], horizontal=True, index=1)
+
+if tipe == "Pengeluaran":
+    kategori_options = ["🏠 Rumah Tangga", "🍔 Makanan & Minuman", "🚗 Transportasi", "🧾 Tagihan", "👨‍⚕️ Kesehatan", "🎉 Hiburan", "📚 Pendidikan", "🛒 Belanja", "🎁 Hadiah/Amal", "Lainnya"]
+else:
+    kategori_options = ["💼 Gaji", "💰 Bonus", "📈 Investasi", "Side Hustle", "🎁 Hadiah", "Lainnya"]
+# --- AKHIR PERBAIKAN ---
+
 with st.sidebar.form("transaction_form", clear_on_submit=True):
     tanggal = st.date_input("Tanggal", datetime.now())
-    tipe = st.radio("Tipe Transaksi", ["Pemasukan", "Pengeluaran"], horizontal=True, index=1)
     
-    if tipe == "Pengeluaran":
-        kategori_options = ["🏠 Rumah Tangga", "🍔 Makanan & Minuman", "🚗 Transportasi", "🧾 Tagihan", "👨‍⚕️ Kesehatan", "🎉 Hiburan", "📚 Pendidikan", "🛒 Belanja", "🎁 Hadiah/Amal", "Lainnya"]
-    else:
-        kategori_options = ["💼 Gaji", "💰 Bonus", "📈 Investasi", "Side Hustle", "🎁 Hadiah", "Lainnya"]
-    
+    # 'tipe' sudah ditentukan di luar form, jadi kita bisa langsung gunakan
+    # 'kategori_options' yang sudah benar di sini.
     kategori = st.selectbox("Kategori", kategori_options)
+    
     jumlah = st.number_input("Jumlah (Rp)", min_value=0.0, step=1000.0, format="%.2f")
     catatan = st.text_area("Catatan (Opsional)")
     
@@ -126,7 +135,7 @@ if submitted and GSHEET_CONNECTED:
         else:
             new_row = [
                 tanggal.strftime("%Y-%m-%d"), 
-                tipe,
+                tipe, # Variabel 'tipe' dari luar form digunakan di sini
                 kategori,
                 jumlah,
                 catatan
