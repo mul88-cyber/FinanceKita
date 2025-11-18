@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 from datetime import datetime
+import gspread  # Pastikan gspread ada di requirements.txt
 
 # --- Konfigurasi Halaman ---
 st.set_page_config(
@@ -12,13 +13,15 @@ st.set_page_config(
 
 # --- Judul Utama ---
 st.title("✨ Dashboard Keuangan Keluarga PRO")
-st.caption(f"Versi 2.0 | Tersambung ke Google Sheets 📄 | Data per: {datetime.now().strftime('%d %B %Y')}")
+st.caption(f"Versi 2.1 | Tersambung ke Google Sheets 📄 | Data per: {datetime.now().strftime('%d %B %Y')}")
 
 # --- Helper Function untuk Donut Chart ---
 def create_donut_chart(df, title):
     """Membuat Donut Chart Altair dari DataFrame."""
-    if df.empty:
-        return st.write(f"Tidak ada data untuk {title.lower()}.")
+    # Tambahkan pengecekan jika jumlah total adalah 0
+    if df.empty or df["Jumlah"].sum() == 0:
+        st.write(f"Tidak ada data untuk {title.lower()}.")
+        return
 
     # Hitung total untuk persentase
     total = df["Jumlah"].sum()
@@ -48,18 +51,11 @@ def create_donut_chart(df, title):
         text=alt.Text('Total', format=',.0f'),
     )
     
-    # Teks label (persentase)
-    text_labels = base.mark_text(radius=140, fill="white").encode(
-        text=alt.Text("Persentase", format=".1%"),
-        order=alt.Order("Jumlah", sort="descending"),
-        color=alt.value("white") # Ganti ke black jika theme terang
-    )
-
-    chart = donut + text_total + text_labels
+    # Label persentase di luar chart seringkali tumpang tindih, jadi kita sederhanakan
+    chart = donut + text_total
     return st.altair_chart(chart, use_container_width=True)
 
 # --- Setup Koneksi Google Sheets ---
-# (Kode ini sama persis, tidak perlu diubah)
 try:
     creds = st.secrets["gsheets_credentials"]
     gc = gspread.service_account_from_dict(creds)
@@ -74,7 +70,6 @@ except Exception as e:
     worksheet = None
 
 # --- Fungsi untuk Membaca Data ---
-# (Kode ini sama persis, _ws sudah diperbaiki)
 @st.cache_data(ttl=60)
 def load_data(_ws):
     """Membaca semua data dari worksheet dan mengubahnya jadi DataFrame."""
@@ -82,20 +77,30 @@ def load_data(_ws):
         data = _ws.get_all_records()
         if not data:
             return pd.DataFrame(columns=["Tanggal", "Tipe", "Kategori", "Jumlah", "Catatan"])
+        
         df = pd.DataFrame(data)
+        
         required_cols = ["Tanggal", "Tipe", "Kategori", "Jumlah", "Catatan"]
         for col in required_cols:
             if col not in df.columns:
                 df[col] = None
-        df['Tanggal'] = pd.to_datetime(df['Tanggal'])
-        df['Jumlah'] = pd.to_numeric(df['Jumlah'])
+        
+        # --- PERBAIKAN ERROR ---
+        # 1. Konversi Tanggal dengan errors='coerce' untuk mengubah format yang salah/kosong menjadi NaT
+        df['Tanggal'] = pd.to_datetime(df['Tanggal'], errors='coerce')
+        
+        # 2. Konversi Jumlah dengan errors='coerce' dan isi 0 untuk yang gagal
+        df['Jumlah'] = pd.to_numeric(df['Jumlah'], errors='coerce').fillna(0)
+        
+        # 3. Hapus baris di mana Tanggal adalah NaT (tidak valid)
+        df.dropna(subset=['Tanggal'], inplace=True)
+        
         return df
     except Exception as e:
         st.error(f"Gagal membaca data dari sheet: {e}")
         return pd.DataFrame(columns=["Tanggal", "Tipe", "Kategori", "Jumlah", "Catatan"])
 
 # --- Sidebar: Input Form ---
-# (Kode ini sama persis, tetap di sidebar agar mudah diakses)
 st.sidebar.header("📝 Tambah Transaksi Baru")
 with st.sidebar.form("transaction_form", clear_on_submit=True):
     tanggal = st.date_input("Tanggal", datetime.now())
@@ -113,23 +118,26 @@ with st.sidebar.form("transaction_form", clear_on_submit=True):
     submitted = st.form_submit_button("✓ Tambah Transaksi")
 
 # --- Logika untuk Menambah Transaksi ---
-# (Kode ini sama persis)
 if submitted and GSHEET_CONNECTED:
     try:
-        new_row = [
-            tanggal.strftime("%Y-%m-%d"), 
-            tipe,
-            kategori,
-            jumlah,
-            catatan
-        ]
-        all_values = worksheet.get_all_values()
-        if not all_values:
-            header = ["Tanggal", "Tipe", "Kategori", "Jumlah", "Catatan"]
-            worksheet.append_row(header)
-        worksheet.append_row(new_row)
-        st.sidebar.success("Transaksi berhasil ditambahkan!")
-        st.cache_data.clear() # Wajib agar data di-refresh
+        # Validasi input
+        if jumlah <= 0:
+            st.sidebar.warning("Jumlah harus lebih besar dari 0.")
+        else:
+            new_row = [
+                tanggal.strftime("%Y-%m-%d"), 
+                tipe,
+                kategori,
+                jumlah,
+                catatan
+            ]
+            all_values = worksheet.get_all_values()
+            if not all_values:
+                header = ["Tanggal", "Tipe", "Kategori", "Jumlah", "Catatan"]
+                worksheet.append_row(header)
+            worksheet.append_row(new_row)
+            st.sidebar.success("Transaksi berhasil ditambahkan!")
+            st.cache_data.clear() # Wajib agar data di-refresh
     except Exception as e:
         st.sidebar.error(f"Gagal menyimpan ke GSheet: {e}")
 elif submitted:
@@ -143,21 +151,33 @@ if GSHEET_CONNECTED:
     df = load_data(worksheet)
 
     if df.empty:
-        st.info("Belum ada transaksi di Google Sheet. Silakan tambahkan transaksi baru melalui sidebar.")
+        st.info("Belum ada transaksi valid di Google Sheet. Silakan tambahkan transaksi baru melalui sidebar.")
         st.balloons()
     else:
         # --- 1. FILTER DATA ---
         st.header("🔍 Filter Dashboard")
         
-        # Ambil tanggal min/max dari data
-        min_date = df['Tanggal'].min().date()
-        max_date = df['Tanggal'].max().date()
+        # --- PERBAIKAN ERROR ---
+        # Cek jika min/max adalah NaT (Not a Time) setelah load_data
+        min_date_val = df['Tanggal'].min()
+        max_date_val = df['Tanggal'].max()
+
+        if pd.isna(min_date_val) or pd.isna(max_date_val):
+            st.warning("Data tanggal di GSheet sepertinya kosong/invalid. Menggunakan tanggal hari ini.")
+            min_date = datetime.now().date()
+            max_date = datetime.now().date()
+        else:
+            # Konversi ke .date() HANYA jika valid
+            min_date = min_date_val.date()
+            max_date = max_date_val.date()
         
         col1, col2 = st.columns(2)
         with col1:
-            start_date = st.date_input("Tanggal Mulai", min_date, min_value=min_date, max_value=max_date)
+            default_start = min_date
+            start_date = st.date_input("Tanggal Mulai", default_start, min_value=min_date, max_value=max_date)
         with col2:
-            end_date = st.date_input("Tanggal Akhir", max_date, min_value=min_date, max_value=max_date)
+            default_end = max_date
+            end_date = st.date_input("Tanggal Akhir", default_end, min_value=min_date, max_value=max_date)
             
         # Filter Kategori
         all_kategori = df['Kategori'].unique()
@@ -166,6 +186,12 @@ if GSHEET_CONNECTED:
         st.divider()
 
         # --- 2. LOGIKA FILTERISASI DATA ---
+        # Pastikan start_date dan end_date adalah datetime.date
+        if not isinstance(start_date, datetime.date):
+            start_date = datetime.now().date()
+        if not isinstance(end_date, datetime.date):
+            end_date = datetime.now().date()
+
         df_filtered = df[
             (df['Tanggal'].dt.date >= start_date) &
             (df['Tanggal'].dt.date <= end_date) &
@@ -192,7 +218,7 @@ if GSHEET_CONNECTED:
                 
                 # Rata-rata pengeluaran harian
                 total_hari = (end_date - start_date).days + 1
-                avg_pengeluaran = total_pengeluaran / total_hari
+                avg_pengeluaran = total_pengeluaran / total_hari if total_hari > 0 else 0
 
                 # Tampilkan Metrik
                 col1, col2, col3 = st.columns(3)
@@ -217,15 +243,22 @@ if GSHEET_CONNECTED:
                 # Grafik Arus Kas (Cashflow)
                 st.subheader("Arus Kas (Cashflow)")
                 df_sorted = df_filtered.sort_values(by="Tanggal").copy()
-                df_sorted['Perubahan'] = df_sorted.apply(lambda row: row['Jumlah'] if row['Tipe'] == 'Pemasukan' else -row['Jumlah'], axis=1)
-                df_sorted['Saldo Kumulatif'] = df_sorted['Perubahan'].cumsum()
+                if not df_sorted.empty:
+                    df_sorted['Perubahan'] = df_sorted.apply(lambda row: row['Jumlah'] if row['Tipe'] == 'Pemasukan' else -row['Jumlah'], axis=1)
+                    # Hitung Saldo Kumulatif dari Saldo Awal (jika ada data sebelum start_date)
+                    df_before = df[df['Tanggal'].dt.date < start_date]
+                    saldo_awal = df_before.apply(lambda row: row['Jumlah'] if row['Tipe'] == 'Pemasukan' else -row['Jumlah'], axis=1).sum()
+                    
+                    df_sorted['Saldo Kumulatif'] = df_sorted['Perubahan'].cumsum() + saldo_awal
 
-                line_chart = alt.Chart(df_sorted).mark_line(point=True).encode(
-                    x=alt.X('Tanggal', title='Tanggal'),
-                    y=alt.Y('Saldo Kumulatif', title='Saldo (Rp)'),
-                    tooltip=['Tanggal', 'Tipe', 'Kategori', 'Jumlah', 'Saldo Kumulatif']
-                ).interactive()
-                st.altair_chart(line_chart, use_container_width=True)
+                    line_chart = alt.Chart(df_sorted).mark_line(point=True).encode(
+                        x=alt.X('Tanggal', title='Tanggal'),
+                        y=alt.Y('Saldo Kumulatif', title='Saldo (Rp)'),
+                        tooltip=['Tanggal', 'Tipe', 'Kategori', 'Jumlah', 'Saldo Kumulatif']
+                    ).interactive()
+                    st.altair_chart(line_chart, use_container_width=True)
+                else:
+                    st.write("Tidak ada data untuk ditampilkan di grafik arus kas.")
 
             # --- TAB 2: ANALISIS MENDALAM ---
             with tab_analisis:
@@ -248,7 +281,7 @@ if GSHEET_CONNECTED:
                     df_filtered.sort_values(by="Tanggal", ascending=False), 
                     use_container_width=True,
                     column_config={
-                        "Jumlah": st.column_config.NumberColumn("Jumlah (Rp)", format="Rp %d"),
+                        "Jumlah": st.column_config.NumberColumn("Jumlah (Rp)", format="Rp %'.0f"),
                         "Tanggal": st.column_config.DateColumn("Tanggal", format="DD/MM/YYYY"),
                         "Tipe": st.column_config.TextColumn("Tipe"),
                         "Kategori": st.column_config.TextColumn("Kategori"),
