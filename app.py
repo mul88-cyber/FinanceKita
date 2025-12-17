@@ -978,4 +978,4 @@ else:
 
 # --- Footer ---
 st.divider()
-st.caption("© 2024 FinanceKita PRO | Made with ❤️ using Streamlit")
+st.caption("© 2026 FinanceKita PRO | Made with ❤️ using Streamlit")
