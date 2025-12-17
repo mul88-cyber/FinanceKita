@@ -7,6 +7,8 @@ import gspread
 import time
 import io
 from dateutil.relativedelta import relativedelta
+import hashlib
+import json
 
 # --- Konfigurasi Halaman ---
 st.set_page_config(
@@ -303,27 +305,43 @@ def create_monthly_trend_chart(df):
 # ---              FUNGSI UTILITAS & CACHING               ---
 # --- ====================================================== ---
 
-@st.cache_data(ttl=300, show_spinner="🔄 Memuat data dari Google Sheets...")
-def load_data_cached(ws):
-    """Membaca semua data dari worksheet dengan caching."""
+def get_data_hash():
+    """Generate hash berdasarkan timestamp untuk cache invalidation."""
+    return datetime.now().strftime("%Y%m%d%H")
+
+# Cache data dengan cara yang compatible
+def load_data_with_cache(ws, cache_key=None):
+    """Membaca data dengan caching yang aman."""
     try:
+        # Cek session state untuk cached data
+        if 'cached_data' in st.session_state and 'cache_key' in st.session_state:
+            if st.session_state.cache_key == get_data_hash():
+                return st.session_state.cached_data
+        
+        # Jika tidak ada cache atau cache expired, load data baru
         data = ws.get_all_records()
         if not data:
-            return pd.DataFrame(columns=["Tanggal", "Tipe", "Kategori", "Jumlah", "Catatan"])
+            df = pd.DataFrame(columns=["Tanggal", "Tipe", "Kategori", "Jumlah", "Catatan"])
+        else:
+            df = pd.DataFrame(data)
+            
+            required_cols = ["Tanggal", "Tipe", "Kategori", "Jumlah", "Catatan"]
+            for col in required_cols:
+                if col not in df.columns:
+                    df[col] = None
+            
+            df['Tanggal'] = pd.to_datetime(df['Tanggal'], errors='coerce')
+            df['Jumlah'] = pd.to_numeric(df['Jumlah'], errors='coerce').fillna(0)
+            df.dropna(subset=['Tanggal'], inplace=True)
+            df = df[df['Jumlah'] > 0]
         
-        df = pd.DataFrame(data)
-        
-        required_cols = ["Tanggal", "Tipe", "Kategori", "Jumlah", "Catatan"]
-        for col in required_cols:
-            if col not in df.columns:
-                df[col] = None
-        
-        df['Tanggal'] = pd.to_datetime(df['Tanggal'], errors='coerce')
-        df['Jumlah'] = pd.to_numeric(df['Jumlah'], errors='coerce').fillna(0)
-        df.dropna(subset=['Tanggal'], inplace=True)
-        df = df[df['Jumlah'] > 0]
+        # Simpan ke session state
+        st.session_state.cached_data = df
+        st.session_state.cache_key = get_data_hash()
+        st.session_state.last_refresh = datetime.now()
         
         return df
+        
     except Exception as e:
         st.error(f"Gagal membaca data: {e}")
         return pd.DataFrame(columns=["Tanggal", "Tipe", "Kategori", "Jumlah", "Catatan"])
@@ -427,6 +445,7 @@ with st.sidebar:
             if st.button(f"{name}\nRp{amount:,}", 
                          use_container_width=True,
                          key=f"quick_{idx}"):
+                # Auto-fill form dengan session state
                 st.session_state.quick_amount = amount
                 st.session_state.quick_category = name.split(" ")[1] if " " in name else name
                 st.rerun()
@@ -434,44 +453,56 @@ with st.sidebar:
     # --- BUDGET SETTINGS ---
     st.markdown('<h3 class="sidebar-header">🎯 Budget Bulanan</h3>', unsafe_allow_html=True)
     
-    budget_settings = {}
+    # Initialize budget settings in session state
+    if 'budget_settings' not in st.session_state:
+        st.session_state.budget_settings = {
+            "Makanan": 1000000,
+            "Transportasi": 500000,
+            "Hiburan": 300000,
+            "Belanja": 800000
+        }
+    
     budget_categories = ["Makanan", "Transportasi", "Hiburan", "Belanja"]
     for cat in budget_categories:
-        budget_settings[cat] = st.number_input(
+        st.session_state.budget_settings[cat] = st.number_input(
             f"Budget {cat}", 
             min_value=0, 
-            value=1000000 if cat == "Makanan" else 500000,
+            value=st.session_state.budget_settings[cat],
             step=100000,
             key=f"budget_{cat}"
         )
     
-    # --- EXPORT/IMPORT ---
-    st.markdown('<h3 class="sidebar-header">💾 Data Management</h3>', unsafe_allow_html=True)
+    # --- REFRESH DATA ---
+    st.markdown('<h3 class="sidebar-header">🔄 Refresh Data</h3>', unsafe_allow_html=True)
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("📥 Export CSV", use_container_width=True):
-            if GSHEET_CONNECTED and worksheet:
-                df = load_data_cached(worksheet)
-                csv = df.to_csv(index=False)
-                st.download_button(
-                    label="Download CSV",
-                    data=csv,
-                    file_name=f"finance_backup_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
+        if st.button("🔄 Refresh", use_container_width=True):
+            # Clear cache
+            if 'cached_data' in st.session_state:
+                del st.session_state.cached_data
+            if 'cache_key' in st.session_state:
+                del st.session_state.cache_key
+            st.rerun()
     
     with col2:
-        uploaded_file = st.file_uploader("📤 Import CSV", type=['csv'], label_visibility="collapsed")
-        if uploaded_file:
-            try:
-                df_import = pd.read_csv(uploaded_file)
-                st.success(f"✅ File loaded: {len(df_import)} rows")
-                if st.button("Import ke Google Sheets", use_container_width=True):
-                    st.info("Fitur import ke Google Sheets dalam pengembangan...")
-            except:
-                st.error("File CSV tidak valid")
+        if st.button("📊 Stats", use_container_width=True):
+            st.session_state.show_stats = True
+    
+    # --- EXPORT DATA ---
+    st.markdown('<h3 class="sidebar-header">💾 Export Data</h3>', unsafe_allow_html=True)
+    
+    if st.button("📥 Export CSV", use_container_width=True):
+        if GSHEET_CONNECTED and worksheet:
+            df = load_data_with_cache(worksheet)
+            csv = df.to_csv(index=False)
+            st.download_button(
+                label="Download CSV",
+                data=csv,
+                file_name=f"finance_backup_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
 
 # --- Logika untuk Menambah Transaksi ---
 if submitted and GSHEET_CONNECTED:
@@ -494,9 +525,13 @@ if submitted and GSHEET_CONNECTED:
                         worksheet.append_row(header)
                     worksheet.append_row(new_row)
                     
-                    time.sleep(0.5)
-                    st.success("✅ Transaksi berhasil ditambahkan!")
+                    # Clear cache agar data terbaru di-load
+                    if 'cached_data' in st.session_state:
+                        del st.session_state.cached_data
+                    
                     time.sleep(1)
+                    st.success("✅ Transaksi berhasil ditambahkan!")
+                    time.sleep(1.5)
                     st.rerun()
     except Exception as e:
         st.sidebar.error(f"❌ Gagal menyimpan: {e}")
@@ -508,8 +543,8 @@ elif submitted:
 # --- ====================================================== ---
 
 if GSHEET_CONNECTED:
-    # Load data dengan caching
-    df = load_data_cached(worksheet)
+    # Load data dengan caching yang aman
+    df = load_data_with_cache(worksheet)
     
     if df.empty:
         st.info("📭 Belum ada transaksi di Google Sheet. Mulai dengan menambahkan transaksi di sidebar!")
@@ -538,30 +573,25 @@ if GSHEET_CONNECTED:
         # --- Quick Date Range Buttons ---
         col_quick = st.columns(5)
         with col_quick[0]:
-            if st.button("Hari Ini", use_container_width=True):
+            if st.button("Hari Ini", use_container_width=True, key="btn_today"):
                 start_date = datetime.now().date()
                 end_date = start_date
-                st.rerun()
         with col_quick[1]:
-            if st.button("7 Hari", use_container_width=True):
+            if st.button("7 Hari", use_container_width=True, key="btn_7days"):
                 end_date = datetime.now().date()
                 start_date = end_date - timedelta(days=6)
-                st.rerun()
         with col_quick[2]:
-            if st.button("Bulan Ini", use_container_width=True):
+            if st.button("Bulan Ini", use_container_width=True, key="btn_month"):
                 start_date = datetime.now().replace(day=1).date()
                 end_date = datetime.now().date()
-                st.rerun()
         with col_quick[3]:
-            if st.button("3 Bulan", use_container_width=True):
+            if st.button("3 Bulan", use_container_width=True, key="btn_3months"):
                 end_date = datetime.now().date()
                 start_date = end_date - relativedelta(months=3)
-                st.rerun()
         with col_quick[4]:
-            if st.button("Semua", use_container_width=True):
+            if st.button("Semua", use_container_width=True, key="btn_all"):
                 start_date = min_date
                 end_date = max_date
-                st.rerun()
         
         st.divider()
         
@@ -756,7 +786,7 @@ if GSHEET_CONNECTED:
                 available_months = sorted(df['Bulan-Tahun'].unique(), reverse=True)
                 
                 if available_months:
-                    selected_month = st.selectbox("Pilih Bulan", available_months)
+                    selected_month = st.selectbox("Pilih Bulan", available_months, key="select_month")
                     
                     # Heatmap
                     heatmap = create_calendar_heatmap(df, selected_month)
@@ -783,7 +813,7 @@ if GSHEET_CONNECTED:
                 st.subheader("Budget vs Actual Spending")
                 
                 # Hitung perbandingan budget vs actual
-                budget_vs_actual = calculate_budget_vs_actual(df_filtered, budget_settings)
+                budget_vs_actual = calculate_budget_vs_actual(df_filtered, st.session_state.budget_settings)
                 
                 if not budget_vs_actual.empty:
                     # Tampilkan sebagai tabel
@@ -849,11 +879,12 @@ if GSHEET_CONNECTED:
                 # Search dan filter tambahan
                 col_search, col_sort = st.columns([2, 1])
                 with col_search:
-                    search_query = st.text_input("🔍 Cari di Catatan...", placeholder="Ketik untuk mencari...")
+                    search_query = st.text_input("🔍 Cari di Catatan...", placeholder="Ketik untuk mencari...", key="search_input")
                 
                 with col_sort:
                     sort_by = st.selectbox("Urutkan berdasarkan", 
-                                          ["Tanggal (Terbaru)", "Tanggal (Terlama)", "Jumlah (Terbesar)", "Jumlah (Terkecil)"])
+                                          ["Tanggal (Terbaru)", "Tanggal (Terlama)", "Jumlah (Terbesar)", "Jumlah (Terkecil)"],
+                                          key="sort_select")
                 
                 # Apply search filter
                 df_display = df_filtered.copy()
@@ -908,8 +939,17 @@ if GSHEET_CONNECTED:
                     data=csv,
                     file_name=f"data_filtered_{start_date}_{end_date}.csv",
                     mime="text/csv",
-                    use_container_width=True
+                    use_container_width=True,
+                    key="download_filtered"
                 )
+                
+                # Tampilkan statistik cache jika diminta
+                if st.session_state.get('show_stats', False):
+                    with st.expander("📈 Cache Statistics"):
+                        st.write(f"**Last Refresh:** {st.session_state.get('last_refresh', 'Never')}")
+                        st.write(f"**Cache Key:** {st.session_state.get('cache_key', 'None')}")
+                        st.write(f"**Data Rows:** {len(df)}")
+                        st.write(f"**Memory Usage:** {df.memory_usage(deep=True).sum() / 1024 / 1024:.2f} MB")
 
 else:
     st.error("❌ Aplikasi tidak dapat berjalan tanpa koneksi ke Google Sheets.")
