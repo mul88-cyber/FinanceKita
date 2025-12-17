@@ -55,6 +55,9 @@ st.markdown("""
         transform: translateY(-2px);
         box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
     }
+    .dataframe tbody tr:hover {
+        background-color: rgba(102, 126, 234, 0.1) !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -333,13 +336,37 @@ def forecast_next_month(df):
         monthly_totals = df_monthly.groupby('Bulan')['Jumlah'].sum().tail(3)
         
         if len(monthly_totals) >= 2:
-            # Weighted average
             weights = [0.5, 0.3, 0.2][:len(monthly_totals)]
             forecast = (monthly_totals * weights[:len(monthly_totals)]).sum()
             return forecast
     except:
         pass
     return None
+
+def calculate_budget_vs_actual(df, budget_settings):
+    """Menghitung perbandingan budget vs actual spending."""
+    results = []
+    df_pengeluaran = df[df['Tipe'] == 'Pengeluaran'].copy()
+    
+    for category, budget in budget_settings.items():
+        # Cari kategori yang mengandung nama category (case-insensitive)
+        actual = 0
+        for cat in df_pengeluaran['Kategori'].unique():
+            if category.lower() in cat.lower():
+                actual += df_pengeluaran[df_pengeluaran['Kategori'] == cat]['Jumlah'].sum()
+        
+        if budget > 0:
+            percentage = (actual / budget) * 100
+            status = "🟢" if percentage <= 80 else "🟡" if percentage <= 100 else "🔴"
+            results.append({
+                'Kategori': category,
+                'Budget': budget,
+                'Actual': actual,
+                'Percentage': percentage,
+                'Status': status
+            })
+    
+    return pd.DataFrame(results)
 
 # --- Setup Koneksi Google Sheets ---
 try:
@@ -402,7 +429,7 @@ with st.sidebar:
                          key=f"quick_{idx}"):
                 st.session_state.quick_amount = amount
                 st.session_state.quick_category = name.split(" ")[1] if " " in name else name
-                st.success(f"Quick action: {name} - Rp{amount:,}")
+                st.rerun()
     
     # --- BUDGET SETTINGS ---
     st.markdown('<h3 class="sidebar-header">🎯 Budget Bulanan</h3>', unsafe_allow_html=True)
@@ -514,22 +541,27 @@ if GSHEET_CONNECTED:
             if st.button("Hari Ini", use_container_width=True):
                 start_date = datetime.now().date()
                 end_date = start_date
+                st.rerun()
         with col_quick[1]:
             if st.button("7 Hari", use_container_width=True):
                 end_date = datetime.now().date()
                 start_date = end_date - timedelta(days=6)
+                st.rerun()
         with col_quick[2]:
             if st.button("Bulan Ini", use_container_width=True):
                 start_date = datetime.now().replace(day=1).date()
                 end_date = datetime.now().date()
+                st.rerun()
         with col_quick[3]:
             if st.button("3 Bulan", use_container_width=True):
                 end_date = datetime.now().date()
                 start_date = end_date - relativedelta(months=3)
+                st.rerun()
         with col_quick[4]:
             if st.button("Semua", use_container_width=True):
                 start_date = min_date
                 end_date = max_date
+                st.rerun()
         
         st.divider()
         
@@ -743,4 +775,167 @@ if GSHEET_CONNECTED:
                             st.metric("Rata-rata Harian", f"Rp {avg_daily:,.0f}")
                         with col_stat3:
                             days_with_spending = len(df_month[df_month['Tipe'] == 'Pengeluaran']['Tanggal'].dt.day.unique())
-                            total_days = len(df_month['Tanggal'].dt.day
+                            total_days = len(df_month['Tanggal'].dt.day.unique())
+                            st.metric("Hari dengan Pengeluaran", f"{days_with_spending}/{total_days}")
+            
+            # --- TAB 4: BUDGETING ---
+            with tab4:
+                st.subheader("Budget vs Actual Spending")
+                
+                # Hitung perbandingan budget vs actual
+                budget_vs_actual = calculate_budget_vs_actual(df_filtered, budget_settings)
+                
+                if not budget_vs_actual.empty:
+                    # Tampilkan sebagai tabel
+                    st.dataframe(
+                        budget_vs_actual,
+                        column_config={
+                            "Kategori": "Kategori",
+                            "Budget": st.column_config.NumberColumn("Budget (Rp)", format="Rp %'.0f"),
+                            "Actual": st.column_config.NumberColumn("Actual (Rp)", format="Rp %'.0f"),
+                            "Percentage": st.column_config.ProgressColumn(
+                                "Persentase",
+                                format="%.1f%%",
+                                min_value=0,
+                                max_value=150,
+                            ),
+                            "Status": "Status"
+                        },
+                        use_container_width=True
+                    )
+                    
+                    # Visualisasi perbandingan
+                    st.subheader("Visualisasi Budget vs Actual")
+                    
+                    budget_chart_data = budget_vs_actual.melt(
+                        id_vars=['Kategori', 'Status'],
+                        value_vars=['Budget', 'Actual'],
+                        var_name='Type',
+                        value_name='Amount'
+                    )
+                    
+                    budget_chart = alt.Chart(budget_chart_data).mark_bar().encode(
+                        x=alt.X('Kategori:N', title='Kategori'),
+                        y=alt.Y('Amount:Q', title='Jumlah (Rp)'),
+                        color=alt.Color('Type:N', scale=alt.Scale(
+                            domain=['Budget', 'Actual'],
+                            range=['#4CAF50', '#FF9800']
+                        )),
+                        column='Type:N',
+                        tooltip=['Kategori', 'Type', alt.Tooltip('Amount', format=',.0f')]
+                    ).properties(
+                        title='Perbandingan Budget vs Actual Spending',
+                        height=300
+                    )
+                    
+                    st.altair_chart(budget_chart, use_container_width=True)
+                    
+                    # Rekomendasi berdasarkan budget
+                    st.subheader("💡 Rekomendasi")
+                    for _, row in budget_vs_actual.iterrows():
+                        if row['Percentage'] > 100:
+                            st.warning(f"**{row['Kategori']}**: Melebihi budget sebesar {row['Percentage']-100:.1f}%. Perlu dikurangi pengeluarannya.")
+                        elif row['Percentage'] > 80:
+                            st.info(f"**{row['Kategori']}**: Mendekati limit budget ({row['Percentage']:.1f}%). Hati-hati dalam pengeluaran.")
+                        else:
+                            st.success(f"**{row['Kategori']}**: Masih dalam budget ({row['Percentage']:.1f}%). Bagus!")
+                else:
+                    st.info("Setel budget terlebih dahulu di sidebar untuk melihat analisis budgeting.")
+            
+            # --- TAB 5: DATA ---
+            with tab5:
+                st.subheader("Data Transaksi Lengkap")
+                
+                # Search dan filter tambahan
+                col_search, col_sort = st.columns([2, 1])
+                with col_search:
+                    search_query = st.text_input("🔍 Cari di Catatan...", placeholder="Ketik untuk mencari...")
+                
+                with col_sort:
+                    sort_by = st.selectbox("Urutkan berdasarkan", 
+                                          ["Tanggal (Terbaru)", "Tanggal (Terlama)", "Jumlah (Terbesar)", "Jumlah (Terkecil)"])
+                
+                # Apply search filter
+                df_display = df_filtered.copy()
+                if search_query:
+                    df_display = df_display[df_display['Catatan'].astype(str).str.contains(search_query, case=False, na=False)]
+                
+                # Apply sorting
+                if sort_by == "Tanggal (Terbaru)":
+                    df_display = df_display.sort_values('Tanggal', ascending=False)
+                elif sort_by == "Tanggal (Terlama)":
+                    df_display = df_display.sort_values('Tanggal', ascending=True)
+                elif sort_by == "Jumlah (Terbesar)":
+                    df_display = df_display.sort_values('Jumlah', ascending=False)
+                elif sort_by == "Jumlah (Terkecil)":
+                    df_display = df_display.sort_values('Jumlah', ascending=True)
+                
+                # Tampilkan ringkasan
+                with st.expander("📊 Ringkasan Kategori", expanded=False):
+                    df_summary = df_filtered.groupby(['Tipe', 'Kategori'])['Jumlah'].agg(['sum', 'count']).reset_index()
+                    df_summary = df_summary.rename(columns={'sum': 'Total', 'count': 'Jumlah Transaksi'})
+                    
+                    st.dataframe(
+                        df_summary,
+                        column_config={
+                            "Total": st.column_config.NumberColumn("Total (Rp)", format="Rp %'.0f"),
+                            "Jumlah Transaksi": "Jumlah Transaksi",
+                            "Tipe": "Tipe",
+                            "Kategori": "Kategori"
+                        },
+                        use_container_width=True
+                    )
+                
+                # Tampilkan data transaksi
+                st.dataframe(
+                    df_display,
+                    column_config={
+                        "Tanggal": st.column_config.DateColumn("Tanggal", format="DD/MM/YYYY"),
+                        "Tipe": st.column_config.TextColumn("Tipe"),
+                        "Kategori": st.column_config.TextColumn("Kategori"),
+                        "Jumlah": st.column_config.NumberColumn("Jumlah (Rp)", format="Rp %'.0f"),
+                        "Catatan": st.column_config.TextColumn("Catatan")
+                    },
+                    use_container_width=True,
+                    height=400,
+                    hide_index=True
+                )
+                
+                # Download button untuk data yang difilter
+                csv = df_display.to_csv(index=False)
+                st.download_button(
+                    label="📥 Download Data (CSV)",
+                    data=csv,
+                    file_name=f"data_filtered_{start_date}_{end_date}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
+else:
+    st.error("❌ Aplikasi tidak dapat berjalan tanpa koneksi ke Google Sheets.")
+    st.info("""
+    ### Untuk menjalankan aplikasi:
+    1. Buat file `secrets.toml` di folder `.streamlit/`
+    2. Isi dengan credentials Google Sheets Anda:
+    ```
+    [gsheets_credentials]
+    type = "service_account"
+    project_id = "..."
+    private_key_id = "..."
+    private_key = "..."
+    client_email = "..."
+    client_id = "..."
+    auth_uri = "https://accounts.google.com/o/oauth2/auth"
+    token_uri = "https://oauth2.googleapis.com/token"
+    auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+    client_x509_cert_url = "..."
+    
+    GSHEET_URL = "https://docs.google.com/spreadsheets/d/..."
+    WORKSHEET_NAME = "Data"
+    ```
+    3. Restart aplikasi Streamlit
+    """)
+
+# --- Footer ---
+st.divider()
+st.caption("© 2024 FinanceKita PRO | Made with ❤️ using Streamlit")
