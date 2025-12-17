@@ -370,11 +370,12 @@ def calculate_budget_vs_actual(df, budget_settings):
         # Cari kategori yang mengandung nama category (case-insensitive)
         actual = 0
         for cat in df_pengeluaran['Kategori'].unique():
-            if category.lower() in cat.lower():
+            # PERBAIKAN DI SINI: Cek jika 'cat' adalah string sebelum memanggil .lower()
+            if isinstance(cat, str) and category.lower() in cat.lower():
                 actual += df_pengeluaran[df_pengeluaran['Kategori'] == cat]['Jumlah'].sum()
         
         if budget > 0:
-            percentage = (actual / budget) * 100
+            percentage = (actual / budget) * 100 if budget > 0 else 0
             status = "🟢" if percentage <= 80 else "🟡" if percentage <= 100 else "🔴"
             results.append({
                 'Kategori': category,
