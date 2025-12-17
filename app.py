@@ -1,57 +1,113 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
-from datetime import datetime, date
+import plotly.graph_objects as go
+from datetime import datetime, date, timedelta
 import gspread
-import plotly.graph_objects as go 
+import time
+import io
+from dateutil.relativedelta import relativedelta
 
 # --- Konfigurasi Halaman ---
 st.set_page_config(
-    page_title="Dashboard FinanceKita",
-    page_icon="🚀", 
-    layout="wide"
+    page_title="Dashboard FinanceKita PRO",
+    page_icon="💸", 
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
+# --- Custom CSS untuk UI yang lebih baik ---
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem !important;
+        font-weight: 800 !important;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        padding-bottom: 10px;
+    }
+    .metric-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border-radius: 15px;
+        padding: 20px;
+        color: white;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    .stProgress > div > div > div > div {
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+    }
+    .sidebar-header {
+        font-size: 1.5rem !important;
+        font-weight: 700 !important;
+        color: #764ba2 !important;
+        margin-top: 10px;
+        margin-bottom: 10px;
+    }
+    .quick-action-btn {
+        width: 100%;
+        margin: 5px 0;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white !important;
+        border: none;
+    }
+    .quick-action-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # --- Judul Utama ---
-st.title("🚀✨ Dashboard FinanceKita (Versi MAKSIMAL)")
-st.caption(f"Versi 4.3 (Fix NameError) | Tersambung ke Google Sheets 📄 | Data per: {datetime.now().strftime('%d %B %Y')}")
+st.markdown('<h1 class="main-header">💸 Dashboard FinanceKita PRO</h1>', unsafe_allow_html=True)
+st.caption(f"🚀 Versi 5.0 | Tersambung ke Google Sheets | Data per: {datetime.now().strftime('%d %B %Y %H:%M')}")
 
 # --- ====================================================== ---
 # ---               FUNGSI HELPER VISUALISASI              ---
 # --- ====================================================== ---
 
-def create_donut_chart(df, title):
-    """Membuat Donut Chart Altair dari DataFrame."""
+def create_donut_chart(df, title, color_scheme="category10"):
+    """Membuat Donut Chart Altair dari DataFrame dengan color scheme."""
     if df.empty or df["Jumlah"].sum() == 0:
         st.info(f"Tidak ada data untuk {title.lower()}.")
-        return
+        return None
 
     total = df["Jumlah"].sum()
     df['Persentase'] = (df['Jumlah'] / total)
+    df['Display'] = df.apply(lambda x: f"{x['Kategori']}: Rp{x['Jumlah']:,.0f} ({x['Persentase']:.1%})", axis=1)
 
     base = alt.Chart(df).encode(
-       theta=alt.Theta("Jumlah", stack=True)
-    ).properties(title=title)
-
-    donut = base.mark_arc(outerRadius=120, innerRadius=80).encode(
-        color=alt.Color("Kategori", legend=alt.Legend(title="Kategori")),
-        order=alt.Order("Jumlah", sort="descending"),
-        tooltip=["Kategori", "Jumlah", alt.Tooltip("Persentase", format=".1%")]
+        theta=alt.Theta("Jumlah:Q", stack=True),
+        order=alt.Order("Jumlah:Q", sort="descending")
+    ).properties(
+        title=alt.TitleParams(
+            text=title,
+            fontSize=16,
+            fontWeight="bold"
+        ),
+        height=300
     )
 
-    text_total = alt.Chart(pd.DataFrame({'Total': [total]})).mark_text(
+    donut = base.mark_arc(outerRadius=120, innerRadius=80).encode(
+        color=alt.Color("Kategori:N", 
+                       legend=alt.Legend(title="Kategori", columns=2),
+                       scale=alt.Scale(scheme=color_scheme)),
+        tooltip=[alt.Tooltip("Kategori:N", title="Kategori"),
+                alt.Tooltip("Jumlah:Q", title="Jumlah", format=",.0f"),
+                alt.Tooltip("Persentase:Q", title="Persentase", format=".1%")]
+    )
+
+    text_total = alt.Chart(pd.DataFrame({'Total': [f"Rp{total:,.0f}"]})).mark_text(
         align='center', 
         baseline='middle', 
-        fontSize=24,
+        fontSize=20,
         fontWeight="bold",
         color="#FFFFFF"
     ).encode(
-        text=alt.Text('Total', format=',.0f'),
+        text=alt.Text('Total:N'),
     )
     
-    chart = donut + text_total
-    # FIX: Mengganti use_container_width dengan width='stretch'
-    st.altair_chart(chart, use_container_width=True) # Altair masih pakai use_container_width
+    return donut + text_total
 
 def create_calendar_heatmap(df, year_month):
     """Membuat Calendar Heatmap pengeluaran untuk bulan yang dipilih."""
@@ -62,7 +118,7 @@ def create_calendar_heatmap(df, year_month):
     
     if df_month.empty:
         st.info("Tidak ada data pengeluaran untuk bulan yang dipilih.")
-        return
+        return None
 
     df_daily_spend = df_month.groupby(df_month['Tanggal'].dt.date)['Jumlah'].sum().reset_index()
     df_daily_spend['Tanggal'] = pd.to_datetime(df_daily_spend['Tanggal'])
@@ -76,51 +132,59 @@ def create_calendar_heatmap(df, year_month):
     
     df_calendar['day'] = df_calendar['Tanggal'].dt.day
     df_calendar['week'] = df_calendar['Tanggal'].dt.isocalendar().week
-    df_calendar['weekday'] = df_calendar['Tanggal'].dt.dayofweek # Senin=0, Minggu=6
+    df_calendar['weekday'] = df_calendar['Tanggal'].dt.dayofweek
     
-    # --- PERBAIKAN BUG HEATMAP ---
     day_labels = "['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'][datum.value]"
     
-    heatmap = alt.Chart(df_calendar).mark_rect(stroke='black', strokeWidth=1).encode(
-        x=alt.X('week:O', title='Minggu ke-', axis=alt.Axis(labels=True, ticks=True, domain=False)),
-        y=alt.Y('weekday:O', title='Hari', axis=alt.Axis(labelExpr=day_labels, domain=False, ticks=False)),
-        color=alt.Color('Jumlah', title='Pengeluaran', scale=alt.Scale(range='heatmap'), legend=alt.Legend(direction='horizontal', orient='bottom')),
+    heatmap = alt.Chart(df_calendar).mark_rect(stroke='white', strokeWidth=1).encode(
+        x=alt.X('week:O', title='Minggu ke-', 
+                axis=alt.Axis(labels=True, ticks=True, domain=False, labelAngle=0)),
+        y=alt.Y('weekday:O', title='Hari', 
+                axis=alt.Axis(labelExpr=day_labels, domain=False, ticks=False)),
+        color=alt.Color('Jumlah:Q', title='Pengeluaran (Rp)', 
+                       scale=alt.Scale(scheme='reds'), 
+                       legend=alt.Legend(direction='horizontal', orient='bottom')),
         tooltip=[
-            alt.Tooltip('Tanggal', format='%Y-%m-%d', title='Tanggal'),
-            alt.Tooltip('Jumlah', format=',.0f', title='Total Pengeluaran')
-        ],
-        text=alt.Text('day')
+            alt.Tooltip('Tanggal:T', format='%A, %d %B %Y', title='Tanggal'),
+            alt.Tooltip('Jumlah:Q', format=',.0f', title='Total Pengeluaran')
+        ]
     ).properties(
-        title=f"Peta Panas Pengeluaran Bulan {year_month}"
+        title=alt.TitleParams(
+            text=f"Peta Panas Pengeluaran Bulan {year_month}",
+            fontSize=16,
+            fontWeight="bold"
+        ),
+        height=250
     )
     
-    st.altair_chart(heatmap + heatmap.mark_text(baseline='middle', color='black'), use_container_width=True) # Altair masih pakai use_container_width
-    # --- AKHIR PERBAIKAN ---
+    text = heatmap.mark_text(baseline='middle', fontSize=11, fontWeight='bold').encode(
+        text='day:O',
+        color=alt.condition(
+            alt.datum.Jumlah > df_calendar['Jumlah'].quantile(0.75),
+            alt.value('white'),
+            alt.value('black')
+        )
+    )
+    
+    return heatmap + text
 
-def create_sankey_chart(df, key):
-    """Membuat Sankey Diagram aliran dana dengan key unik."""
-    
-    # --- PERBAIKAN BUG "NameError" ---
-    # Baris ini tidak sengaja terhapus di v4.2
+def create_sankey_chart(df, title):
+    """Membuat Sankey Diagram aliran dana."""
     df_pemasukan = df[df['Tipe'] == 'Pemasukan']
-    # --- AKHIR PERBAIKAN ---
-    
     df_pengeluaran = df[df['Tipe'] == 'Pengeluaran']
     
     if df_pemasukan.empty or df_pengeluaran.empty:
-        st.info("Data Pemasukan atau Pengeluaran tidak lengkap untuk membuat diagram alir.")
-        return
+        return None
 
     labels = []
-    
     sumber_pemasukan = df_pemasukan['Kategori'].unique().tolist()
     labels.extend(sumber_pemasukan)
     
     node_total_pemasukan_idx = len(labels)
-    labels.append("Total Pemasukan")
+    labels.append("TOTAL PEMASUKAN")
     
     node_total_pengeluaran_idx = len(labels)
-    labels.append("Total Pengeluaran")
+    labels.append("TOTAL PENGELUARAN")
 
     kategori_pengeluaran = df_pengeluaran['Kategori'].unique().tolist()
     labels.extend(kategori_pengeluaran)
@@ -130,72 +194,115 @@ def create_sankey_chart(df, key):
     source_nodes = []
     target_nodes = []
     values = []
+    colors = []
     
     df_agg_pemasukan = df_pemasukan.groupby('Kategori')['Jumlah'].sum()
     for kategori, jumlah in df_agg_pemasukan.items():
         source_nodes.append(label_to_idx[kategori])
         target_nodes.append(node_total_pemasukan_idx)
         values.append(jumlah)
+        colors.append("rgba(0, 200, 83, 0.8)")
         
     total_pemasukan = df_agg_pemasukan.sum()
-    
     total_pengeluaran = df_pengeluaran['Jumlah'].sum()
+    
     if total_pengeluaran > 0:
         source_nodes.append(node_total_pemasukan_idx)
         target_nodes.append(node_total_pengeluaran_idx)
-        values.append(total_pengeluaran) 
+        values.append(total_pengeluaran)
+        colors.append("rgba(255, 193, 7, 0.8)")
 
     df_agg_pengeluaran = df_pengeluaran.groupby('Kategori')['Jumlah'].sum()
     for kategori, jumlah in df_agg_pengeluaran.items():
         source_nodes.append(node_total_pengeluaran_idx)
         target_nodes.append(label_to_idx[kategori])
         values.append(jumlah)
+        colors.append("rgba(244, 67, 54, 0.8)")
 
     sisa = total_pemasukan - total_pengeluaran
     if sisa > 0:
         node_tabungan_idx = len(labels)
-        labels.append("Sisa Dana (Tabungan)")
+        labels.append("💎 TABUNGAN")
         
         source_nodes.append(node_total_pemasukan_idx)
         target_nodes.append(node_tabungan_idx)
         values.append(sisa)
+        colors.append("rgba(33, 150, 243, 0.8)")
 
     fig = go.Figure(data=[go.Sankey(
+        arrangement="snap",
         node=dict(
-            pad=15,
-            thickness=20,
-            line=dict(color="black", width=0.5),
+            pad=25,
+            thickness=25,
+            line=dict(color="black", width=1),
             label=labels,
-            color="blue"
+            color="rgba(100, 126, 234, 0.8)",
+            hovertemplate='%{label}: Rp%{value:.0f}<extra></extra>'
         ),
         link=dict(
             source=source_nodes,
             target=target_nodes,
-            value=values
+            value=values,
+            color=colors,
+            hovertemplate='Dana mengalir: Rp%{value:.0f}<extra></extra>'
         )
     )])
     
-    fig.update_layout(title_text="Diagram Alir Finance (Sankey)", font_size=12, template="plotly_dark")
-    st.plotly_chart(fig, use_container_width=True, key=key) 
+    fig.update_layout(
+        title_text=f"<b>{title}</b>",
+        font_size=12,
+        height=500,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)'
+    )
+    
+    return fig
 
+def create_monthly_trend_chart(df):
+    """Membuat chart trend bulanan."""
+    df_monthly = df.copy()
+    df_monthly['Bulan'] = df_monthly['Tanggal'].dt.to_period('M').astype(str)
+    
+    monthly_summary = df_monthly.groupby(['Bulan', 'Tipe'])['Jumlah'].sum().unstack(fill_value=0)
+    monthly_summary['Saldo'] = monthly_summary.get('Pemasukan', 0) - monthly_summary.get('Pengeluaran', 0)
+    monthly_summary = monthly_summary.reset_index()
+    
+    base = alt.Chart(monthly_summary).encode(
+        x=alt.X('Bulan:N', title='Bulan', axis=alt.Axis(labelAngle=-45))
+    )
+    
+    bars_pemasukan = base.mark_bar(size=25).encode(
+        y=alt.Y('Pemasukan:Q', title='Jumlah (Rp)'),
+        color=alt.value('#4CAF50'),
+        tooltip=['Bulan', alt.Tooltip('Pemasukan:Q', format=',.0f', title='Pemasukan')]
+    )
+    
+    bars_pengeluaran = base.mark_bar(size=25).encode(
+        y=alt.Y('Pengeluaran:Q'),
+        color=alt.value('#F44336'),
+        tooltip=['Bulan', alt.Tooltip('Pengeluaran:Q', format=',.0f', title='Pengeluaran')]
+    )
+    
+    line_saldo = base.mark_line(point=True, strokeWidth=3).encode(
+        y=alt.Y('Saldo:Q', title='Saldo'),
+        color=alt.value('#2196F3'),
+        tooltip=['Bulan', alt.Tooltip('Saldo:Q', format=',.0f', title='Saldo')]
+    )
+    
+    return alt.layer(bars_pemasukan, bars_pengeluaran, line_saldo).resolve_scale(
+        y='independent'
+    ).properties(
+        title="Trend Bulanan - Pemasukan, Pengeluaran & Saldo",
+        height=350
+    )
 
-# --- Setup Koneksi Google Sheets ---
-try:
-    creds = st.secrets["gsheets_credentials"]
-    gc = gspread.service_account_from_dict(creds)
-    spreadsheet_url = st.secrets["GSHEET_URL"]
-    worksheet_name = st.secrets["WORKSHEET_NAME"]
-    sh = gc.open_by_url(spreadsheet_url)
-    worksheet = sh.worksheet(worksheet_name)
-    GSHEET_CONNECTED = True
-except Exception as e:
-    st.error(f"Gagal terhubung ke Google Sheets. Pastikan 'secrets.toml' sudah benar. Error: {e}")
-    GSHEET_CONNECTED = False
-    worksheet = None
+# --- ====================================================== ---
+# ---              FUNGSI UTILITAS & CACHING               ---
+# --- ====================================================== ---
 
-# --- Fungsi Load Data (Tanpa Cache) ---
-def load_data(ws):
-    """Membaca semua data dari worksheet dan mengubahnya jadi DataFrame."""
+@st.cache_data(ttl=300, show_spinner="🔄 Memuat data dari Google Sheets...")
+def load_data_cached(ws):
+    """Membaca semua data dari worksheet dengan caching."""
     try:
         data = ws.get_all_records()
         if not data:
@@ -211,251 +318,429 @@ def load_data(ws):
         df['Tanggal'] = pd.to_datetime(df['Tanggal'], errors='coerce')
         df['Jumlah'] = pd.to_numeric(df['Jumlah'], errors='coerce').fillna(0)
         df.dropna(subset=['Tanggal'], inplace=True)
-        
         df = df[df['Jumlah'] > 0]
         
         return df
     except Exception as e:
-        st.error(f"Gagal membaca data dari sheet: {e}")
+        st.error(f"Gagal membaca data: {e}")
         return pd.DataFrame(columns=["Tanggal", "Tipe", "Kategori", "Jumlah", "Catatan"])
 
-# --- Sidebar: Input Form ---
-st.sidebar.header("📝 Tambah Transaksi Baru")
-tipe = st.sidebar.radio("Tipe Transaksi", ["Pemasukan", "Pengeluaran"], horizontal=True, index=1)
+def forecast_next_month(df):
+    """Prediksi pengeluaran bulan depan."""
+    try:
+        df_monthly = df[df['Tipe'] == 'Pengeluaran'].copy()
+        df_monthly['Bulan'] = df_monthly['Tanggal'].dt.to_period('M')
+        monthly_totals = df_monthly.groupby('Bulan')['Jumlah'].sum().tail(3)
+        
+        if len(monthly_totals) >= 2:
+            # Weighted average
+            weights = [0.5, 0.3, 0.2][:len(monthly_totals)]
+            forecast = (monthly_totals * weights[:len(monthly_totals)]).sum()
+            return forecast
+    except:
+        pass
+    return None
 
-if tipe == "Pengeluaran":
-    kategori_options = ["🏠 Rumah Tangga", "🍔 Makanan & Minuman", "🚗 Transportasi", "🧾 Tagihan", "👨‍⚕️ Kesehatan", "🎉 Hiburan", "📚 Pendidikan", "🛒 Belanja", "🎁 Hadiah/Amal", "Lainnya"]
-else:
-    kategori_options = ["💼 Gaji", "💰 Bonus", "📈 Investasi", "Side Hustle", "🎁 Hadiah", "Lainnya"]
+# --- Setup Koneksi Google Sheets ---
+try:
+    creds = st.secrets["gsheets_credentials"]
+    gc = gspread.service_account_from_dict(creds)
+    spreadsheet_url = st.secrets["GSHEET_URL"]
+    worksheet_name = st.secrets["WORKSHEET_NAME"]
+    sh = gc.open_by_url(spreadsheet_url)
+    worksheet = sh.worksheet(worksheet_name)
+    GSHEET_CONNECTED = True
+except Exception as e:
+    st.error(f"❌ Gagal terhubung ke Google Sheets: {e}")
+    GSHEET_CONNECTED = False
+    worksheet = None
 
-with st.sidebar.form("transaction_form", clear_on_submit=True):
-    tanggal = st.date_input("Tanggal", datetime.now())
-    kategori = st.selectbox("Kategori", kategori_options)
-    jumlah = st.number_input("Jumlah (Rp)", min_value=1.0, step=1000.0, format="%.2f") 
-    catatan = st.text_area("Catatan (Opsional)")
+# --- ====================================================== ---
+# ---                     SIDEBAR                          ---
+# --- ====================================================== ---
+
+with st.sidebar:
+    st.markdown('<h3 class="sidebar-header">📝 Input Transaksi</h3>', unsafe_allow_html=True)
     
-    submitted = st.form_submit_button("✓ Tambah Transaksi")
+    tipe = st.radio("**Tipe Transaksi**", ["Pemasukan", "Pengeluaran"], 
+                    horizontal=True, index=1, label_visibility="collapsed")
+    
+    if tipe == "Pengeluaran":
+        kategori_options = ["🏠 Rumah Tangga", "🍔 Makanan", "🚗 Transportasi", 
+                           "🧾 Tagihan", "👨‍⚕️ Kesehatan", "🎉 Hiburan", 
+                           "📚 Pendidikan", "🛒 Belanja", "🎁 Hadiah/Amal", "Lainnya"]
+    else:
+        kategori_options = ["💼 Gaji", "💰 Bonus", "📈 Investasi", 
+                           "💻 Freelance", "🎁 Hadiah", "Lainnya"]
+    
+    with st.form("transaction_form", clear_on_submit=True):
+        tanggal = st.date_input("📅 Tanggal", datetime.now())
+        kategori = st.selectbox("🏷️ Kategori", kategori_options)
+        jumlah = st.number_input("💰 Jumlah (Rp)", min_value=1.0, step=1000.0, 
+                                format="%.0f", help="Masukkan jumlah tanpa titik")
+        catatan = st.text_area("📝 Catatan (Opsional)", height=80,
+                              placeholder="Deskripsi transaksi...")
+        
+        submitted = st.form_submit_button("✅ **Tambah Transaksi**", use_container_width=True)
+    
+    # --- QUICK ACTIONS ---
+    st.markdown('<h3 class="sidebar-header">⚡ Quick Actions</h3>', unsafe_allow_html=True)
+    
+    quick_actions = {
+        "🍔 Makan Siang": 50000,
+        "☕ Kopi": 25000,
+        "⛽ Bensin": 150000,
+        "📦 GrabFood": 75000,
+        "🛒 Minimarket": 100000,
+    }
+    
+    cols = st.columns(2)
+    for idx, (name, amount) in enumerate(quick_actions.items()):
+        with cols[idx % 2]:
+            if st.button(f"{name}\nRp{amount:,}", 
+                         use_container_width=True,
+                         key=f"quick_{idx}"):
+                st.session_state.quick_amount = amount
+                st.session_state.quick_category = name.split(" ")[1] if " " in name else name
+                st.success(f"Quick action: {name} - Rp{amount:,}")
+    
+    # --- BUDGET SETTINGS ---
+    st.markdown('<h3 class="sidebar-header">🎯 Budget Bulanan</h3>', unsafe_allow_html=True)
+    
+    budget_settings = {}
+    budget_categories = ["Makanan", "Transportasi", "Hiburan", "Belanja"]
+    for cat in budget_categories:
+        budget_settings[cat] = st.number_input(
+            f"Budget {cat}", 
+            min_value=0, 
+            value=1000000 if cat == "Makanan" else 500000,
+            step=100000,
+            key=f"budget_{cat}"
+        )
+    
+    # --- EXPORT/IMPORT ---
+    st.markdown('<h3 class="sidebar-header">💾 Data Management</h3>', unsafe_allow_html=True)
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📥 Export CSV", use_container_width=True):
+            if GSHEET_CONNECTED and worksheet:
+                df = load_data_cached(worksheet)
+                csv = df.to_csv(index=False)
+                st.download_button(
+                    label="Download CSV",
+                    data=csv,
+                    file_name=f"finance_backup_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+    
+    with col2:
+        uploaded_file = st.file_uploader("📤 Import CSV", type=['csv'], label_visibility="collapsed")
+        if uploaded_file:
+            try:
+                df_import = pd.read_csv(uploaded_file)
+                st.success(f"✅ File loaded: {len(df_import)} rows")
+                if st.button("Import ke Google Sheets", use_container_width=True):
+                    st.info("Fitur import ke Google Sheets dalam pengembangan...")
+            except:
+                st.error("File CSV tidak valid")
 
 # --- Logika untuk Menambah Transaksi ---
 if submitted and GSHEET_CONNECTED:
     try:
         if jumlah <= 0:
-             st.sidebar.warning("Jumlah harus lebih besar dari 0.")
+            st.sidebar.warning("❌ Jumlah harus lebih besar dari 0.")
         else:
-            new_row = [
-                tanggal.strftime("%Y-%m-%d"), 
-                tipe,
-                kategori,
-                jumlah,
-                catatan
-            ]
-            all_values = worksheet.get_all_values()
-            if not all_values:
-                header = ["Tanggal", "Tipe", "Kategori", "Jumlah", "Catatan"]
-                worksheet.append_row(header)
-            worksheet.append_row(new_row)
-            st.sidebar.success("Transaksi berhasil ditambahkan!")
-            st.rerun() # Menggunakan st.rerun() yang lebih baru
-            
+            with st.sidebar:
+                with st.spinner("Menyimpan transaksi..."):
+                    new_row = [
+                        tanggal.strftime("%Y-%m-%d"), 
+                        tipe,
+                        kategori,
+                        jumlah,
+                        catatan or ""
+                    ]
+                    all_values = worksheet.get_all_values()
+                    if not all_values:
+                        header = ["Tanggal", "Tipe", "Kategori", "Jumlah", "Catatan"]
+                        worksheet.append_row(header)
+                    worksheet.append_row(new_row)
+                    
+                    time.sleep(0.5)
+                    st.success("✅ Transaksi berhasil ditambahkan!")
+                    time.sleep(1)
+                    st.rerun()
     except Exception as e:
-        st.sidebar.error(f"Gagal menyimpan ke GSheet: {e}")
+        st.sidebar.error(f"❌ Gagal menyimpan: {e}")
 elif submitted:
-    st.sidebar.error("Koneksi GSheet gagal, tidak bisa menambah transaksi.")
+    st.sidebar.error("❌ Koneksi GSheet gagal, tidak bisa menambah transaksi.")
 
 # --- ====================================================== ---
-# ---               MAIN DASHBOARD (VERSI MAKSIMAL)          ---
+# ---               MAIN DASHBOARD                          ---
 # --- ====================================================== ---
 
 if GSHEET_CONNECTED:
-    df = load_data(worksheet)
-
+    # Load data dengan caching
+    df = load_data_cached(worksheet)
+    
     if df.empty:
-        st.info("Belum ada transaksi valid di Google Sheet. Silakan tambahkan transaksi baru melalui sidebar.")
+        st.info("📭 Belum ada transaksi di Google Sheet. Mulai dengan menambahkan transaksi di sidebar!")
         st.balloons()
     else:
         # --- 1. FILTER DATA ---
         st.header("🔍 Filter Dashboard")
         
-        min_date_val = df['Tanggal'].min()
-        max_date_val = df['Tanggal'].max()
-
-        if pd.isna(min_date_val) or pd.isna(max_date_val):
-            min_date = datetime.now().date()
-            max_date = datetime.now().date()
-        else:
-            min_date = min_date_val.date()
-            max_date = max_date_val.date()
+        min_date = df['Tanggal'].min().date()
+        max_date = df['Tanggal'].max().date()
         
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
-            start_date = st.date_input("Tanggal Mulai", min_date, min_value=min_date, max_value=max_date)
+            start_date = st.date_input("Dari", min_date, min_value=min_date, max_value=max_date)
         with col2:
-            end_date = st.date_input("Tanggal Akhir", max_date, min_value=min_date, max_value=max_date)
-            
-        all_kategori = df['Kategori'].unique().tolist() 
-        selected_kategori = st.multiselect("Filter Kategori", all_kategori, default=all_kategori)
+            end_date = st.date_input("Sampai", max_date, min_value=min_date, max_value=max_date)
+        with col3:
+            all_kategori = df['Kategori'].unique().tolist()
+            selected_kategori = st.multiselect(
+                "Kategori", 
+                all_kategori, 
+                default=all_kategori,
+                placeholder="Pilih kategori..."
+            )
+        
+        # --- Quick Date Range Buttons ---
+        col_quick = st.columns(5)
+        with col_quick[0]:
+            if st.button("Hari Ini", use_container_width=True):
+                start_date = datetime.now().date()
+                end_date = start_date
+        with col_quick[1]:
+            if st.button("7 Hari", use_container_width=True):
+                end_date = datetime.now().date()
+                start_date = end_date - timedelta(days=6)
+        with col_quick[2]:
+            if st.button("Bulan Ini", use_container_width=True):
+                start_date = datetime.now().replace(day=1).date()
+                end_date = datetime.now().date()
+        with col_quick[3]:
+            if st.button("3 Bulan", use_container_width=True):
+                end_date = datetime.now().date()
+                start_date = end_date - relativedelta(months=3)
+        with col_quick[4]:
+            if st.button("Semua", use_container_width=True):
+                start_date = min_date
+                end_date = max_date
         
         st.divider()
-
+        
         # --- 2. LOGIKA FILTERISASI DATA ---
-        if not isinstance(start_date, date): start_date = min_date
-        if not isinstance(end_date, date): end_date = max_date
-
         df_filtered = df[
             (df['Tanggal'].dt.date >= start_date) &
             (df['Tanggal'].dt.date <= end_date) &
             (df['Kategori'].isin(selected_kategori))
         ]
-
+        
         if df_filtered.empty:
-            st.warning("Tidak ada data transaksi yang sesuai dengan filter Anda.")
+            st.warning("⚠️ Tidak ada data yang sesuai dengan filter Anda.")
         else:
-            # --- 3. TAMPILAN TAB ---
-            tab_ringkasan, tab_analisis, tab_bulanan, tab_data = st.tabs(
-                ["📊 Ringkasan", "📈 Analisis Proporsi", "📅 Analisis Bulanan", "📚 Data Transaksi"]
-            )
-
-            # --- TAB 1: RINGKASAN ---
-            with tab_ringkasan:
-                st.subheader(f"Ringkasan dari {start_date.strftime('%d/%m/%Y')} s/d {end_date.strftime('%d/%m/%Y')}")
-
-                total_pemasukan = df_filtered[df_filtered["Tipe"] == "Pemasukan"]["Jumlah"].sum()
-                total_pengeluaran = df_filtered[df_filtered["Tipe"] == "Pengeluaran"]["Jumlah"].sum()
-                saldo_saat_ini = total_pemasukan - total_pengeluaran
-                jumlah_transaksi = df_filtered.shape[0]
-                
-                total_hari = (end_date - start_date).days + 1
-                avg_pengeluaran = total_pengeluaran / total_hari if total_hari > 0 else 0
-
-                col1, col2, col3 = st.columns([1.5, 1.5, 2])
-                col1.metric("Total Pemasukan", f"Rp {total_pemasukan:,.0f}", "👍")
-                col2.metric("Total Pengeluaran", f"Rp {total_pengeluaran:,.0f}", "👎", delta_color="inverse")
-                
-                saldo_color = "green" if saldo_saat_ini >= 0 else "red"
-                col3.markdown(f"""
-                <div style="background-color: #222; border: 2px solid {saldo_color}; border-radius: 10px; padding: 16px; text-align: center;">
-                    <span style="font-size: 1.2rem; color: #AAA; font-weight: bold;">SALDO AKHIR</span>
-                    <br>
-                    <span style="font-size: 2.5rem; font-weight: bold; color: {saldo_color};">Rp {saldo_saat_ini:,.0f}</span>
+            # --- 3. HEADER METRICS ---
+            total_pemasukan = df_filtered[df_filtered["Tipe"] == "Pemasukan"]["Jumlah"].sum()
+            total_pengeluaran = df_filtered[df_filtered["Tipe"] == "Pengeluaran"]["Jumlah"].sum()
+            saldo = total_pemasukan - total_pengeluaran
+            jumlah_transaksi = df_filtered.shape[0]
+            
+            total_hari = (end_date - start_date).days + 1
+            avg_pengeluaran_harian = total_pengeluaran / total_hari if total_hari > 0 else 0
+            
+            # Forecast untuk bulan depan
+            forecast = forecast_next_month(df)
+            
+            col1, col2, col3, col4, col5 = st.columns(5)
+            
+            with col1:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div style="font-size: 0.9rem; opacity: 0.9;">Total Pemasukan</div>
+                    <div style="font-size: 1.8rem; font-weight: bold;">Rp {total_pemasukan:,.0f}</div>
+                    <div style="font-size: 0.8rem;">↑ {total_pemasukan/len(df_filtered[df_filtered["Tipe"] == "Pemasukan"]):,.0f}/transaksi</div>
                 </div>
                 """, unsafe_allow_html=True)
+            
+            with col2:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div style="font-size: 0.9rem; opacity: 0.9;">Total Pengeluaran</div>
+                    <div style="font-size: 1.8rem; font-weight: bold;">Rp {total_pengeluaran:,.0f}</div>
+                    <div style="font-size: 0.8rem;">↓ {avg_pengeluaran_harian:,.0f}/hari</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col3:
+                saldo_color = "#4CAF50" if saldo >= 0 else "#F44336"
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, {"#4CAF50" if saldo >= 0 else "#F44336"} 0%, {"#388E3C" if saldo >= 0 else "#D32F2F"} 100%); 
+                            border-radius: 15px; padding: 20px; color: white; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                    <div style="font-size: 0.9rem; opacity: 0.9;">Saldo Akhir</div>
+                    <div style="font-size: 1.8rem; font-weight: bold;">Rp {saldo:,.0f}</div>
+                    <div style="font-size: 0.8rem;">{"🟢 Surplus" if saldo >= 0 else "🔴 Defisit"}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col4:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div style="font-size: 0.9rem; opacity: 0.9;">Jumlah Transaksi</div>
+                    <div style="font-size: 1.8rem; font-weight: bold;">{jumlah_transaksi:,}</div>
+                    <div style="font-size: 0.8rem;">{len(df_filtered[df_filtered["Tipe"] == "Pemasukan"]):,} pemasukan, {len(df_filtered[df_filtered["Tipe"] == "Pengeluaran"]):,} pengeluaran</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col5:
+                forecast_text = f"Rp {forecast:,.0f}" if forecast else "Tidak cukup data"
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div style="font-size: 0.9rem; opacity: 0.9;">Prediksi Bulan Depan</div>
+                    <div style="font-size: 1.5rem; font-weight: bold;">{forecast_text}</div>
+                    <div style="font-size: 0.8rem;">Berdasarkan 3 bulan terakhir</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            st.divider()
+            
+            # --- 4. TABS UTAMA ---
+            tab1, tab2, tab3, tab4, tab5 = st.tabs([
+                "📊 Ringkasan", 
+                "📈 Analisis", 
+                "📅 Kalender", 
+                "💰 Budgeting", 
+                "📋 Data"
+            ])
+            
+            # --- TAB 1: RINGKASAN ---
+            with tab1:
+                col1, col2 = st.columns(2)
                 
-                st.divider()
-                
-                col4, col5 = st.columns(2)
-                col4.metric("Jumlah Transaksi", f"{jumlah_transaksi} kali")
-                col5.metric("Rata-rata Pengeluaran / Hari", f"Rp {avg_pengeluaran:,.0f}")
-                
-                st.divider()
-
-                st.subheader("Pemasukan vs. Pengeluaran Harian")
-                df_grouped = df_filtered.groupby(['Tanggal', 'Tipe'])['Jumlah'].sum().reset_index()
-                
-                bar_chart = alt.Chart(df_grouped).mark_bar().encode(
-                    x=alt.X('Tanggal', title='Tanggal', axis=alt.Axis(format="%Y-%m-%d")),
-                    y=alt.Y('Jumlah', title='Jumlah (Rp)'),
-                    color=alt.Color('Tipe', title='Tipe', scale=alt.Scale(domain=['Pemasukan', 'Pengeluaran'], range=['green', 'red'])),
-                    tooltip=['Tanggal', 'Tipe', 'Jumlah']
-                ).interactive()
-                st.altair_chart(bar_chart, use_container_width=True)
-
-                st.subheader("Arus Kas (Cashflow Kumulatif)")
-                df_sorted = df_filtered.sort_values(by="Tanggal").copy()
-                if not df_sorted.empty:
-                    df_sorted['Perubahan'] = df_sorted.apply(lambda row: row['Jumlah'] if row['Tipe'] == 'Pemasukan' else -row['Jumlah'], axis=1)
-                    df_before = df[df['Tanggal'].dt.date < start_date]
-                    saldo_awal = df_before.apply(lambda row: row['Jumlah'] if row['Tipe'] == 'Pemasukan' else -row['Jumlah'], axis=1).sum()
-                    df_sorted['Saldo Kumulatif'] = df_sorted['Perubahan'].cumsum() + saldo_awal
-
-                    line_chart = alt.Chart(df_sorted).mark_line(point=True, strokeWidth=3).encode(
-                        x=alt.X('Tanggal', title='Tanggal'),
-                        y=alt.Y('Saldo Kumulatif', title='Saldo (Rp)'),
-                        tooltip=['Tanggal', 'Tipe', 'Kategori', 'Jumlah', 'Saldo Kumulatif']
-                    ).interactive()
-                    st.altair_chart(line_chart, use_container_width=True)
-
-            # --- TAB 2: ANALISIS PROPORSI ---
-            with tab_analisis:
-                st.subheader("Analisis Proporsi (Sesuai Filter)")
-                
-                col_donut1, col_donut2 = st.columns(2)
-                
-                with col_donut1:
-                    df_chart_pengeluaran = df_filtered[df_filtered["Tipe"] == "Pengeluaran"].groupby("Kategori")["Jumlah"].sum().reset_index()
-                    create_donut_chart(df_chart_pengeluaran, "Proporsi Pengeluaran")
-
-                with col_donut2:
-                    df_chart_pemasukan = df_filtered[df_filtered["Tipe"] == "Pemasukan"].groupby("Kategori")["Jumlah"].sum().reset_index()
-                    create_donut_chart(df_chart_pemasukan, "Proporsi Pemasukan")
-                
-                st.divider()
-                
-                st.subheader("Top 5 Kategori Pengeluaran (Sesuai Filter)")
-                df_top_5 = df_chart_pengeluaran.sort_values(by="Jumlah", ascending=False).head(5).reset_index(drop=True)
-                df_top_5.index = df_top_5.index + 1
-                st.dataframe(
-                    df_top_5,
-                    use_container_width=True,
-                    column_config={
-                        "Jumlah": st.column_config.NumberColumn("Jumlah (Rp)", format="Rp %'.0f"),
-                        "Kategori": st.column_config.TextColumn("Kategori"),
-                    }
-                )
-                
-                st.divider()
-                
-                st.subheader("Diagram Alir Dana / Sankey (Sesuai Filter)")
-                create_sankey_chart(df_filtered, key="sankey_filtered")
-
-            # --- TAB 3: ANALISIS BULANAN (BARU) ---
-            with tab_bulanan:
-                st.subheader("Deep Dive Analisis Bulanan")
-                
-                df['Bulan-Tahun'] = df['Tanggal'].dt.strftime('%Y-%m')
-                bulan_tersedia = df['Bulan-Tahun'].sort_values(ascending=False).unique().tolist()
-                
-                if not bulan_tersedia:
-                    st.warning("Tidak ada data bulanan yang bisa dianalisis.")
-                else:
-                    selected_month = st.selectbox("Pilih Bulan untuk Analisis", bulan_tersedia)
-                    
-                    st.divider()
-                    
-                    create_calendar_heatmap(df, selected_month)
-                    
-                    st.divider()
-                    
-                    st.subheader(f"Diagram Alir Dana (Sankey) - Bulan {selected_month}")
-                    df_sankey_bulanan = df[df['Bulan-Tahun'] == selected_month]
-                    create_sankey_chart(df_sankey_bulanan, key="sankey_monthly")
-
-
-            # --- TAB 4: DATA TRANSAKSI ---
-            with tab_data:
-                st.subheader("Data Transaksi (Sesuai Filter)")
-                
-                with st.expander("📊 Klik untuk melihat Ringkasan Kategori (sesuai filter)"):
-                    df_pivot = df_filtered.groupby(['Tipe', 'Kategori'])['Jumlah'].sum().reset_index()
-                    st.dataframe(
-                        df_pivot.sort_values(by=["Tipe", "Jumlah"], ascending=[True, False]), 
-                        use_container_width=True,
-                        column_config={
-                            "Jumlah": st.column_config.NumberColumn("Total Jumlah (Rp)", format="Rp %'.0f"),
-                        }
+                with col1:
+                    st.subheader("Cash Flow Harian")
+                    df_daily = df_filtered.copy()
+                    df_daily['Net'] = df_daily.apply(
+                        lambda x: x['Jumlah'] if x['Tipe'] == 'Pemasukan' else -x['Jumlah'], 
+                        axis=1
                     )
+                    daily_net = df_daily.groupby('Tanggal')['Net'].sum().reset_index()
+                    
+                    if not daily_net.empty:
+                        bar_chart = alt.Chart(daily_net).mark_bar(size=20).encode(
+                            x=alt.X('Tanggal:T', title='Tanggal', axis=alt.Axis(format="%d %b")),
+                            y=alt.Y('Net:Q', title='Net Flow (Rp)'),
+                            color=alt.condition(
+                                alt.datum.Net > 0,
+                                alt.value('#4CAF50'),
+                                alt.value('#F44336')
+                            ),
+                            tooltip=[
+                                alt.Tooltip('Tanggal:T', format='%A, %d %B %Y'),
+                                alt.Tooltip('Net:Q', format=',.0f', title='Net Flow')
+                            ]
+                        ).properties(height=300)
+                        st.altair_chart(bar_chart, use_container_width=True)
                 
-                st.dataframe(
-                    df_filtered.sort_values(by="Tanggal", ascending=False), 
-                    use_container_width=True,
-                    height=500,
-                    column_config={
-                        "Jumlah": st.column_config.NumberColumn("Jumlah (Rp)", format="Rp %'.0f"),
-                        "Tanggal": st.column_config.DateColumn("Tanggal", format="DD/MM/YYYY"),
-                        "Tipe": st.column_config.TextColumn("Tipe"),
-                        "Kategori": st.column_config.TextColumn("Kategori"),
-                        "Catatan": st.column_config.TextColumn("Catatan")
-                    }
-                )
-
-else:
-    st.error("Aplikasi tidak dapat berjalan tanpa koneksi ke Google Sheets. Silakan periksa 'secrets' Anda di Streamlit Cloud.")
+                with col2:
+                    st.subheader("Saldo Kumulatif")
+                    df_cumulative = df_filtered.sort_values('Tanggal').copy()
+                    df_cumulative['Perubahan'] = df_cumulative.apply(
+                        lambda x: x['Jumlah'] if x['Tipe'] == 'Pemasukan' else -x['Jumlah'], 
+                        axis=1
+                    )
+                    df_cumulative['Saldo Kumulatif'] = df_cumulative['Perubahan'].cumsum()
+                    
+                    if not df_cumulative.empty:
+                        area_chart = alt.Chart(df_cumulative).mark_area(
+                            line={'color': '#2196F3'},
+                            color=alt.Gradient(
+                                gradient='linear',
+                                stops=[alt.GradientStop(color='#2196F3', offset=0),
+                                      alt.GradientStop(color='rgba(33, 150, 243, 0.1)', offset=1)],
+                                x1=0, x2=0, y1=1, y2=0
+                            )
+                        ).encode(
+                            x=alt.X('Tanggal:T', title='Tanggal'),
+                            y=alt.Y('Saldo Kumulatif:Q', title='Saldo (Rp)'),
+                            tooltip=['Tanggal:T', 'Saldo Kumulatif:Q']
+                        ).properties(height=300)
+                        st.altair_chart(area_chart, use_container_width=True)
+                
+                # Trend Bulanan
+                st.subheader("Trend Bulanan")
+                trend_chart = create_monthly_trend_chart(df)
+                if trend_chart:
+                    st.altair_chart(trend_chart, use_container_width=True)
+            
+            # --- TAB 2: ANALISIS ---
+            with tab2:
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.subheader("Proporsi Pengeluaran")
+                    df_pengeluaran = df_filtered[df_filtered["Tipe"] == "Pengeluaran"]
+                    if not df_pengeluaran.empty:
+                        df_chart_pengeluaran = df_pengeluaran.groupby("Kategori")["Jumlah"].sum().reset_index()
+                        donut_pengeluaran = create_donut_chart(df_chart_pengeluaran, "Pengeluaran", "reds")
+                        if donut_pengeluaran:
+                            st.altair_chart(donut_pengeluaran, use_container_width=True)
+                    
+                    # Top 5 Pengeluaran
+                    st.subheader("🔥 Top 5 Pengeluaran")
+                    if not df_pengeluaran.empty:
+                        df_top5 = df_pengeluaran.groupby('Kategori')['Jumlah'].sum().nlargest(5).reset_index()
+                        df_top5.index = range(1, len(df_top5) + 1)
+                        
+                        for idx, row in df_top5.iterrows():
+                            percent = (row['Jumlah'] / df_pengeluaran['Jumlah'].sum()) * 100
+                            st.progress(min(percent/100, 1.0), 
+                                       text=f"{row['Kategori']}: Rp{row['Jumlah']:,.0f} ({percent:.1f}%)")
+                
+                with col2:
+                    st.subheader("Proporsi Pemasukan")
+                    df_pemasukan = df_filtered[df_filtered["Tipe"] == "Pemasukan"]
+                    if not df_pemasukan.empty:
+                        df_chart_pemasukan = df_pemasukan.groupby("Kategori")["Jumlah"].sum().reset_index()
+                        donut_pemasukan = create_donut_chart(df_chart_pemasukan, "Pemasukan", "greens")
+                        if donut_pemasukan:
+                            st.altair_chart(donut_pemasukan, use_container_width=True)
+                    
+                    # Sankey Diagram
+                    st.subheader("Diagram Alir Dana")
+                    sankey = create_sankey_chart(df_filtered, "Aliran Dana")
+                    if sankey:
+                        st.plotly_chart(sankey, use_container_width=True)
+            
+            # --- TAB 3: KALENDER ---
+            with tab3:
+                st.subheader("Kalender Pengeluaran")
+                
+                # Pilih bulan
+                df['Bulan-Tahun'] = df['Tanggal'].dt.strftime('%Y-%m')
+                available_months = sorted(df['Bulan-Tahun'].unique(), reverse=True)
+                
+                if available_months:
+                    selected_month = st.selectbox("Pilih Bulan", available_months)
+                    
+                    # Heatmap
+                    heatmap = create_calendar_heatmap(df, selected_month)
+                    if heatmap:
+                        st.altair_chart(heatmap, use_container_width=True)
+                    
+                    # Statistik bulan tersebut
+                    df_month = df[df['Bulan-Tahun'] == selected_month]
+                    if not df_month.empty:
+                        col_stat1, col_stat2, col_stat3 = st.columns(3)
+                        with col_stat1:
+                            total_month = df_month[df_month['Tipe'] == 'Pengeluaran']['Jumlah'].sum()
+                            st.metric(f"Total Pengeluaran {selected_month}", f"Rp {total_month:,.0f}")
+                        with col_stat2:
+                            avg_daily = total_month / len(df_month['Tanggal'].dt.day.unique())
+                            st.metric("Rata-rata Harian", f"Rp {avg_daily:,.0f}")
+                        with col_stat3:
+                            days_with_spending = len(df_month[df_month['Tipe'] == 'Pengeluaran']['Tanggal'].dt.day.unique())
+                            total_days = len(df_month['Tanggal'].dt.day
